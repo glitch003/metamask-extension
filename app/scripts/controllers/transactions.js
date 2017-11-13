@@ -213,6 +213,7 @@ module.exports = class TransactionController extends EventEmitter {
   }
 
   async signTransaction (txId) {
+    console.log('signing tx in TransactionController')
     const txMeta = this.txStateManager.getTx(txId)
     const txParams = txMeta.txParams
     const fromAddress = txParams.from
@@ -220,6 +221,8 @@ module.exports = class TransactionController extends EventEmitter {
     txParams.chainId = ethUtil.addHexPrefix(this.getChainId().toString(16))
     const ethTx = new Transaction(txParams)
     await this.signEthTx(ethTx, fromAddress)
+    console.log('tx signed in TransactionController')
+    console.log(ethTx)
     this.txStateManager.setTxStatusSigned(txMeta.id)
     const rawTx = ethUtil.bufferToHex(ethTx.serialize())
     return rawTx
