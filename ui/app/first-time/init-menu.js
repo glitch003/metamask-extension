@@ -14,6 +14,14 @@ inherits(InitializeMenuScreen, Component)
 function InitializeMenuScreen () {
   Component.call(this)
   this.animationEventEmitter = new EventEmitter()
+  // localhost
+  this.sdkdConfig = {
+    sdkdHost: 'http://localhost:3000',
+    sdkdWsHost: 'ws://localhost:3000',
+    apiKey: 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJhcGlfY2xpZW50X2lkIjoiNGVkNTNiYTAtNTRjYy00M2QwLTk4MDgtZGZiMTY2ZDhhMmI4IiwiY3JlYXRlZF9hdCI6MTUwNzIzNjQ4OH0.z4_h_4iTCYyv0OMCqe6RE0XEvM_DIagTR3lfRbQt74w'
+  }
+
+
 }
 
 function mapStateToProps (state) {
@@ -65,10 +73,10 @@ InitializeMenuScreen.prototype.renderMenu = function (state) {
             color: '#7F8082',
             display: 'inline',
           },
-        }, 'Encrypt your new DEN'),
+        }, 'Pair with your Amble Wallet'),
 
         h(Tooltip, {
-          title: 'Your DEN is your password-encrypted storage within MetaMask.',
+          title: 'Your Amble Wallet is your mobile wallet that can be used via MetaMask',
         }, [
           h('i.fa.fa-question-circle.pointer', {
             style: {
@@ -84,63 +92,51 @@ InitializeMenuScreen.prototype.renderMenu = function (state) {
 
       h('span.in-progress-notification', state.warning),
 
-      // password
+      // email
       h('input.large-input.letter-spacey', {
-        type: 'password',
-        id: 'password-box',
-        placeholder: 'New Password (min 8 chars)',
+        type: 'text',
+        id: 'email-box',
+        placeholder: 'Amble Wallet Email',
         onInput: this.inputChanged.bind(this),
+        onKeyPress: this.pairOnEnter.bind(this),
         style: {
           width: 260,
           marginTop: 12,
         },
       }),
 
-      // confirm password
-      h('input.large-input.letter-spacey', {
-        type: 'password',
-        id: 'password-box-confirm',
-        placeholder: 'Confirm Password',
-        onKeyPress: this.createVaultOnEnter.bind(this),
-        onInput: this.inputChanged.bind(this),
-        style: {
-          width: 260,
-          marginTop: 16,
-        },
-      }),
-
-
       h('button.primary', {
-        onClick: this.createNewVaultAndKeychain.bind(this),
+        onClick: this.pairWithAmbleWallet.bind(this),
         style: {
           margin: 12,
         },
-      }, 'Create'),
+      }, 'Submit'),
 
       h('.flex-row.flex-center.flex-grow', [
         h('p.pointer', {
-          onClick: this.showRestoreVault.bind(this),
+          onClick: function () { window.open('https://www.sdkd.co', '_blank') },
           style: {
             fontSize: '0.8em',
             color: 'rgb(247, 134, 28)',
             textDecoration: 'underline',
           },
-        }, 'Import Existing DEN'),
+        }, 'Get Amble Wallet'),
       ]),
 
     ])
   )
 }
 
-InitializeMenuScreen.prototype.createVaultOnEnter = function (event) {
+InitializeMenuScreen.prototype.pairOnEnter = function (event) {
+  console.log('pairOnEnter')
   if (event.key === 'Enter') {
     event.preventDefault()
-    this.createNewVaultAndKeychain()
+    this.pairWithAmbleWallet()
   }
 }
 
 InitializeMenuScreen.prototype.componentDidMount = function () {
-  document.getElementById('password-box').focus()
+  document.getElementById('email-box').focus()
 }
 
 InitializeMenuScreen.prototype.showRestoreVault = function () {
@@ -148,6 +144,7 @@ InitializeMenuScreen.prototype.showRestoreVault = function () {
 }
 
 InitializeMenuScreen.prototype.createNewVaultAndKeychain = function () {
+  console.log('createNewVaultAndKeychain')
   var passwordBox = document.getElementById('password-box')
   var password = passwordBox.value
   var passwordConfirmBox = document.getElementById('password-box-confirm')
@@ -165,6 +162,79 @@ InitializeMenuScreen.prototype.createNewVaultAndKeychain = function () {
   }
 
   this.props.dispatch(actions.createNewVaultAndKeychain(password))
+}
+
+InitializeMenuScreen.prototype.pairWithAmbleWallet = function () {
+  console.log('pairWithAmbleWallet')
+  let email = document.getElementById('email-box').value
+
+  // ask server to authorize usage of this wallet
+  let wsUri = this.sdkdConfig.sdkdWsHost + '/cable'
+  let websocket = new WebSocket(wsUri)
+  let ts = Date.now()
+  let identifier = {
+    channel: 'RemotePairingChannel',
+    email: email
+  }
+  websocket.onopen = (evt) => {
+    console.log(evt)
+    console.log("CONNECTED")
+
+    // subscribe
+    let msg = {
+      command: "subscribe",
+      identifier: JSON.stringify(identifier)
+    }
+    websocket.send(JSON.stringify(msg))
+  }
+  websocket.onclose = (evt) => { console.log(evt) }
+  websocket.onerror = (evt) => { console.log(evt) }
+  websocket.onmessage = (evt) => {
+    let data = JSON.parse(evt.data)
+    if (data.type === 'ping') {
+      return // ignore pings
+    }
+    console.log(evt)
+
+    // if subscription confirmation, then send signing request
+    // "{"identifier":"{\"channel\":\"RemotePairingChannel\",\"email\":\"cvcassano@gmail.com\"}","type":"confirm_subscription"}"
+    if (data.type === 'confirm_subscription') {
+      // send remote pairing request
+      let data = {
+        action: 'authorize_remote_signing',
+        request_ts: ts
+      }
+      let msg = {
+        command: 'message',
+        identifier: JSON.stringify(identifier),
+        data: JSON.stringify(data)
+      }
+      websocket.send(JSON.stringify(msg))
+      return
+    }
+
+    if (!data.message) {
+      return
+    }
+
+    let pairingRequest = data.message.remote_pairing_request
+    console.log('pairing request: ' + JSON.stringify(pairingRequest))
+    console.log('ts: ' + ts)
+    if (pairingRequest && pairingRequest.request_ts === ts.toString()) {
+      console.log('authorization or rejection is included')
+      websocket.close()
+      if (pairingRequest.status === 'approved') {
+        // save jwt
+        console.log('approved!')
+        window.localStorage.setItem('sdkd_jwt', pairingRequest.jwt)
+        window.localStorage.setItem('sdkd_user_id', pairingRequest.user_id)
+        this.props.dispatch(actions.createNewVaultAndKeychain(email))
+      } else {
+        console.log('rejected!')
+        alert('Amble rejected your pairing request')
+      }
+    }
+  }
 }
 
 InitializeMenuScreen.prototype.inputChanged = function (event) {
